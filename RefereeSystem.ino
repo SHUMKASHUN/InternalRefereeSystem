@@ -1,12 +1,15 @@
 /*
- *  This sketch sends a message to a TCP server
- *
- */
+    This sketch sends a message to a TCP server
+
+*/
 #include <WiFi.h>
 #include <WiFiMulti.h>
-#include "ArduinoJson.h"
+#include <Ticker.h>
+#include <HardwareSerial.h>
 
 WiFiMulti WiFiMulti;
+Ticker sender;
+HardwareSerial MySerial(2);
 
 typedef enum
 {
@@ -15,30 +18,40 @@ typedef enum
   Blue = 5,
   Yellow = 7,
   Green = 9,
-} Color_e;
+} Feedback;
 
 typedef struct
 {
   String transmitName;
   bool resetFlag;
   int remainTime;
-  Color_e transmitColor;
+  Feedback transmitColor;
 } TransmitData_t;
 
 typedef struct
 {
-  String receiveName;
   bool resetFlag;
-  Color_e receiveColor;
+  Feedback receiveColor;
   bool receive_isAvailable;
   bool receive_isStable;
 } ReceiveData_t;
 
 TransmitData_t transmitData;
-ReceiveData_t receiveData;
+volatile ReceiveData_t receiveData;
 
 int32_t start_time;
 bool start_trigger;
+
+void sendMsg() {
+  if (receiveData.receive_isAvailable && receiveData.receive_isStable)
+  {
+    MySerial.write((uint8_t)receiveData.receiveColor);
+  }
+  else
+  {
+    MySerial.write((uint8_t)NOCOLOR);
+  }
+}
 
 void Transmit_data_init()
 {
@@ -50,7 +63,6 @@ void Transmit_data_init()
 
 void Receive_Data_init()
 {
-  receiveData.receiveName = "Blue";
   receiveData.resetFlag = false;
   receiveData.receiveColor = NOCOLOR;
   receiveData.receive_isAvailable = false;
@@ -60,48 +72,51 @@ void Receive_Data_init()
 void setup()
 {
   Serial.begin(115200);
+  MySerial.begin(115200, SERIAL_8E1);
   delay(10);
 
   Transmit_data_init();
   Receive_Data_init();
+  sender.attach(0.05, sendMsg);
   start_trigger = false;
   // We start by connecting to a WiFi network
   WiFiMulti.addAP("enterprize2019", "enterprize2020");
 
-  //    Serial.println();
-  //    Serial.println();
-  //    Serial.print("Waiting for WiFi... ");
+  //Serial.println();
+  //Serial.println();
+  //Serial.print("Waiting for WiFi... ");
 
   while (WiFiMulti.run() != WL_CONNECTED)
   {
-    //        Serial.print("./");
+    //Serial.print("./");
     delay(500);
   }
-  //
-  //    Serial.println("");
-  //    Serial.println("WiFi connected");
-  //    Serial.println("IP address: ");
-  //    Serial.println(WiFi.localIP());
+  //Serial.println("");
+  //Serial.println("WiFi connected");
+  //Serial.println("IP address: ");
+  //Serial.println(WiFi.localIP());
 
   delay(500);
 }
+
+static uint8_t line[4];
 
 void loop()
 {
 
   const uint16_t port = 8124;
-  const char *host = "192.168.1.4";
+  const char *host = "192.168.1.148";
 
-  //    Serial.print("Connecting to ");
-  //    Serial.println(host);
+  //Serial.print("Connecting to ");
+  //Serial.println(host);
 
   // Use WiFiClient class to create TCP connections
   WiFiClient client;
+  client.setTimeout(50);
 
   if (client.connect(host, port))
   {
-    //      Serial.println("con/nected");
-    while (client.connected() || client.available())
+    while (client.connected())
     {
       if (client.available())
       {
@@ -109,7 +124,37 @@ void loop()
         {
           transmitData.remainTime = 300 - ((millis() - start_time) / 1000);
         }
-
+        int s;
+        while ((s = client.read(line, 1)) >= 0 && line[0] != '\n')
+          ;
+        if (s < 0) {
+          //Serial.println("Failed reading buffer");
+          continue;
+        }
+        int failed = client.read(line, 4);
+        //Serial.println("Finished reading buffer");
+        if (failed < 0)
+          continue;
+        switch (line[1])
+        {
+          case 'r':
+            receiveData.receiveColor = Red;
+            break;
+          case 'b':
+            receiveData.receiveColor = Blue;
+            break;
+          case 'y':
+            receiveData.receiveColor = Yellow;
+            break;
+          case 'g':
+            receiveData.receiveColor = Green;
+            break;
+        }
+        receiveData.receive_isAvailable = line[2] == 'T';
+        receiveData.receive_isStable = line[3] == 'T';
+        
+        transmitData.transmitName = line[0] == 'r' ? "Red" : "Blue";
+        transmitData.transmitColor = receiveData.receiveColor;
         client.print("{");
         client.print("\"Name\":");
         client.print(transmitData.transmitName);
@@ -118,189 +163,13 @@ void loop()
         client.print(transmitData.transmitColor);
         client.print("}");
         client.print("\n");
-
-        String line = client.readStringUntil('\n');
-        if (receiveData.receive_isAvailable && receiveData.receive_isStable)
-        {
-          Serial.println(receiveData.receiveColor);
-        }
-        else
-        {
-          Serial.println(0);
-        }
-
-        if (line.substring(9, 12) == "red")
-        {
-          receiveData.receiveName = "Red";
-          if (line.substring(23, 27) == "Blue")
-          {
-            receiveData.receiveColor = Blue;
-            if (line.substring(40, 45) == "false")
-            {
-              receiveData.receive_isStable = false;
-              if (line.substring(60, 65) == "false")
-              {
-                receiveData.receive_isAvailable = false;
-              }
-              else
-              {
-                receiveData.receive_isAvailable = true;
-              }
-            }
-            else
-            {
-              receiveData.receive_isStable = true;
-              if (line.substring(59, 64) == "false")
-              {
-                receiveData.receive_isAvailable = false;
-              }
-              else
-              {
-                receiveData.receive_isAvailable = true;
-              }
-            }
-          }
-          else if (line.substring(23, 27) == "Yell")
-          {
-            receiveData.receiveColor = Yellow;
-            if (line.substring(42, 47) == "false")
-            {
-              receiveData.receive_isStable = false;
-              if (line.substring(62, 67) == "false")
-              {
-                receiveData.receive_isAvailable = false;
-              }
-              else
-              {
-                receiveData.receive_isAvailable = true;
-              }
-            }
-            else
-            {
-              receiveData.receive_isStable = true;
-              if (line.substring(61, 66) == "false")
-              {
-                receiveData.receive_isAvailable = false;
-              }
-              else
-              {
-                receiveData.receive_isAvailable = true;
-              }
-            }
-          }
-          else if (line.substring(23, 27) == "Gree")
-          {
-            receiveData.receiveColor = Green;
-            if (line.substring(41, 46) == "false")
-            {
-              receiveData.receive_isStable = false;
-              if (line.substring(61, 66) == "false")
-              {
-                receiveData.receive_isAvailable = false;
-              }
-              else
-              {
-                receiveData.receive_isAvailable = true;
-              }
-            }
-            else
-            {
-              receiveData.receive_isStable = true;
-              if (line.substring(60, 65) == "false")
-              {
-                receiveData.receive_isAvailable = false;
-              }
-              else
-              {
-                receiveData.receive_isAvailable = true;
-              }
-            }
-          }
-          else
-          {
-            receiveData.receiveColor = Red;
-            if (line.substring(39, 44) == "false")
-            {
-              receiveData.receive_isStable = false;
-              if (line.substring(59, 64) == "false")
-              {
-                receiveData.receive_isAvailable = false;
-              }
-              else
-              {
-                receiveData.receive_isAvailable = true;
-              }
-            }
-            else
-            {
-              receiveData.receive_isStable = true;
-              if (line.substring(58, 63) == "false")
-              {
-                receiveData.receive_isAvailable = false;
-              }
-              else
-              {
-                receiveData.receive_isAvailable = true;
-              }
-            }
-          }
-        }
-        else
-        {
-          receiveData.receiveName = "Blue";
-          if (line.substring(24, 28) == "Blue")
-          {
-            receiveData.receiveColor = Blue;
-          }
-          else if (line.substring(24, 28) == "Yell")
-          {
-            receiveData.receiveColor = Yellow;
-          }
-          else if (line.substring(24, 28) == "Gree")
-          {
-            receiveData.receiveColor = Green;
-          }
-          else
-          {
-            receiveData.receiveColor = Red;
-          }
-        }
-
-        //          Serial.println(line/);
       }
-
-      if (receiveData.resetFlag == true)
-      {
-        start_time = millis();
-        transmitData.resetFlag = true;
-        start_trigger = true;
-      }
-      else
-      {
-        transmitData.resetFlag = false;
-      }
-
-      transmitData.transmitName = receiveData.receiveName;
-      transmitData.transmitColor = receiveData.receiveColor;
     }
+    receiveData.receive_isAvailable = false;
+    receiveData.receive_isStable = false;
     client.stop();
-    Serial.println("\n[Disconnected]");
+    //Serial.println("\n[Disconnected]");
   }
 
-  //
-  //   if (receiveData.resetFlag == true)
-  //   {
-  //      start_time = millis();
-  //      transmitData.resetFlag = true;
-  //      start_trigger = true;
-  //   }
-  //   else
-  //   {
-  //      transmitData.resetFlag = false;
-  //   }
-  //
-  //    transmitData.transmitName = receiveData.receiveName;
-  //    Serial.println(receiveData.receiveName);
-  //    Serial.println(transmitData.transmitName);
   delay(50);
 }
